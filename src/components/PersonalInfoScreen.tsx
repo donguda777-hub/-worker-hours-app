@@ -11,13 +11,32 @@ import { buildUserId } from "../utils/userId";
 
 const defaultSkill: SkillLevel = SKILL_LEVELS[0];
 
-/** Preset companies; replace with admin-registered list later. */
-const COMPANY_OPTIONS = [
-  { mode: "ln" as const, label: "L&N" },
-  { mode: "custom" as const, label: "\uC9C1\uC811 \uC785\uB825" },
+/** 기본 선택 업체(저장값은 companyName 문자열 그대로) */
+const PRESET_COMPANY_NAMES = [
+  "L&N",
+  "\uBBFC\uC601",
+  "L-LINE",
+  "\uAC1C\uC778\uC0AC\uC5C5\uC790",
 ] as const;
 
-type CompanyMode = "unset" | "ln" | "custom";
+type PresetCompanyName = (typeof PRESET_COMPANY_NAMES)[number];
+
+const COMPANY_OPTIONS: ReadonlyArray<
+  | { type: "preset"; label: PresetCompanyName }
+  | { type: "custom"; label: "\uC9C1\uC811 \uC785\uB825" }
+> = [
+  ...PRESET_COMPANY_NAMES.map((label) => ({
+    type: "preset" as const,
+    label,
+  })),
+  { type: "custom" as const, label: "\uC9C1\uC811 \uC785\uB825" },
+];
+
+type CompanyMode = "unset" | PresetCompanyName | "custom";
+
+function isPresetCompanyName(value: string): value is PresetCompanyName {
+  return (PRESET_COMPANY_NAMES as readonly string[]).includes(value);
+}
 
 type PersonalInfoScreenProps = {
   onSaved?: () => void;
@@ -45,7 +64,11 @@ export default function PersonalInfoScreen({
     setPhone(existing.phone);
     const cn = existing.companyName?.trim();
     if (!cn || cn === "L&N") {
-      setCompanyMode("ln");
+      setCompanyMode("L&N");
+      setCompanyCustom("");
+      setCompanyCustomEditing(false);
+    } else if (isPresetCompanyName(cn)) {
+      setCompanyMode(cn);
       setCompanyCustom("");
       setCompanyCustomEditing(false);
     } else {
@@ -78,11 +101,11 @@ export default function PersonalInfoScreen({
   const autoUserId = useMemo(() => buildUserId(name, phone), [name, phone]);
 
   const companyTriggerLabel = useMemo(() => {
-    if (companyMode === "ln") return "L&N";
     if (companyMode === "custom") {
       const t = companyCustom.trim();
       return t.length > 0 ? t : "\uC9C1\uC811 \uC785\uB825";
     }
+    if (companyMode !== "unset") return companyMode;
     return "\uC120\uD0DD";
   }, [companyMode, companyCustom]);
 
@@ -127,7 +150,7 @@ export default function PersonalInfoScreen({
       return;
     }
     const companyName =
-      companyMode === "ln" ? "L&N" : companyCustom.trim();
+      companyMode === "custom" ? companyCustom.trim() : companyMode;
     if (companyMode === "custom" && !companyName) {
       setSaveError(
         "\uC5C5\uCCB4\uBA85\uC744 \uC785\uB825\uD574 \uC8FC\uC138\uC694."
@@ -346,14 +369,19 @@ export default function PersonalInfoScreen({
             </div>
             <ul className="max-h-[min(50vh,16rem)] overflow-y-auto py-1 sm:max-h-72">
               {COMPANY_OPTIONS.map((opt) => {
-                const active = companyMode === opt.mode;
+                const active =
+                  opt.type === "custom"
+                    ? companyMode === "custom"
+                    : companyMode === opt.label;
+                const optionKey =
+                  opt.type === "custom" ? "custom" : opt.label;
                 return (
-                  <li key={opt.mode}>
+                  <li key={optionKey}>
                     <button
                       type="button"
                       onClick={() => {
-                        if (opt.mode === "ln") {
-                          setCompanyMode("ln");
+                        if (opt.type === "preset") {
+                          setCompanyMode(opt.label);
                           setCompanyCustom("");
                           setCompanyCustomEditing(false);
                         } else {
