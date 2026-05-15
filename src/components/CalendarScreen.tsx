@@ -17,7 +17,7 @@ import {
 } from "../storage";
 import {
   ensureWorkerProjectInSupabase,
-  fetchActiveProjectsForWorker,
+  fetchProjectOptionsForWorker,
   normalizeProjectName,
   type ActiveProjectOption,
 } from "../lib/projectsFromSupabase";
@@ -210,9 +210,9 @@ export default function CalendarScreen({ onEditProfile }: Props) {
     let cancelled = false;
     void (async () => {
       setProjectsLoading(true);
-      const list = await fetchActiveProjectsForWorker();
+      const { projects } = await fetchProjectOptionsForWorker();
       if (!cancelled) {
-        setActiveProjects(list);
+        setActiveProjects(projects);
         setProjectsLoading(false);
       }
     })();
@@ -284,8 +284,20 @@ export default function CalendarScreen({ onEditProfile }: Props) {
   );
 
   const reloadActiveProjects = useCallback(async () => {
-    const list = await fetchActiveProjectsForWorker();
-    setActiveProjects(list);
+    const { projects } = await fetchProjectOptionsForWorker();
+    setActiveProjects(projects);
+  }, []);
+
+  const mergeProjectIntoList = useCallback((project_name: string) => {
+    setActiveProjects((prev) => {
+      if (prev.some((p) => p.project_name === project_name)) return prev;
+      return [
+        ...prev,
+        { id: `local:${project_name}`, project_name },
+      ].sort((a, b) =>
+        a.project_name.localeCompare(b.project_name, "ko")
+      );
+    });
   }, []);
 
   function closeProjectModal() {
@@ -411,6 +423,8 @@ export default function CalendarScreen({ onEditProfile }: Props) {
       await uploadWorkerDayEntryToSupabase(entry);
       if (ensured.created) {
         await reloadActiveProjects();
+      } else {
+        mergeProjectIntoList(ensured.project_name);
       }
       closeProjectModal();
     } finally {
