@@ -1,0 +1,26 @@
+{
+  "name": "L&N \uACF5\uC218\uAD00\uB9AC",
+  "short_name": "L&N",
+  "description": "\uC791\uC5C5\uC790\u0020\uACF5\uC218\u0020\uAD00\uB9AC",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "lang": "ko",
+  "dir": "ltr",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
