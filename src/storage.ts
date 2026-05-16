@@ -85,6 +85,7 @@ export async function uploadWorkerDayEntryToSupabase(
       );
       return;
     }
+    /** 공수 저장 시점의 업체명 → worker_day_entries.company_name (개인정보 수정만으로 과거 행은 바뀌지 않음) */
     const companyName =
       profile.companyName != null && profile.companyName.trim() !== ""
         ? profile.companyName.trim()
