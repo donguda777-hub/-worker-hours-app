@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
 } from "react";
 import {
   deleteWorkerDayEntry,
@@ -23,18 +24,71 @@ import {
 } from "../lib/projectsFromSupabase";
 import { getMonthGrid, parseISODate, toISODate } from "../utils/date";
 
-const HOUR_OPTIONS = [0.25, 0.5, 1, 2] as const;
-type HourOption = (typeof HOUR_OPTIONS)[number];
+const HOUR_PRESETS = [0.5, 1, 1.5, 2] as const;
 
 type ModalStep = "projectList" | "projectInput" | "hours";
 
 const LABEL_DIRECT_INPUT = "\uC9C1\uC811 \uC785\uB825";
+/** 공수 선택 단계: 숫자 직접 입력 (프로젝트명 직접입력과 구분되는 화면 단계) */
+const LABEL_MAN_DAY_DIRECT_INPUT = "\uC9C1\uC811\uC785\uB825";
 
-function normalizeHour(v: number): HourOption | null {
-  for (const h of HOUR_OPTIONS) {
-    if (Math.abs(h - v) < 1e-9) return h;
+function matchesHourPreset(n: number): boolean {
+  return HOUR_PRESETS.some((h) => Math.abs(h - n) < 1e-9);
+}
+
+function formatManDayInputDraft(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "";
+  const rounded = Math.round(n * 10000) / 10000;
+  return String(rounded)
+    .replace(/(\.\d*?)0+$/, "$1")
+    .replace(/\.$/, "");
+}
+
+function sanitizeManDayNumericInput(raw: string): string {
+  const noComma = raw.replace(/,/g, ".");
+  let s = noComma.replace(/[^\d.]/g, "");
+  const firstDot = s.indexOf(".");
+  if (firstDot !== -1) {
+    s =
+      s.slice(0, firstDot + 1) +
+      s.slice(firstDot + 1).replace(/\./g, "");
   }
-  return null;
+  return s;
+}
+
+function parsePositiveManDayDraft(draft: string): number | null {
+  const t = draft.trim();
+  if (!t) return null;
+  const n = Number.parseFloat(t.replace(",", "."));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round(n * 10000) / 10000;
+}
+
+function resolveManDayForSave(
+  customOpen: boolean,
+  value: number | null,
+  draft: string
+): number | null {
+  const useCustomBranch =
+    customOpen || (value != null && !matchesHourPreset(value));
+  return useCustomBranch ? parsePositiveManDayDraft(draft) : value;
+}
+
+function seedManDayStateFromExisting(manRaw: unknown): {
+  value: number | null;
+  customOpen: boolean;
+  draft: string;
+} {
+  const md = toManDayNumber(manRaw);
+  if (!Number.isFinite(md) || md <= 0) {
+    return { value: null, customOpen: false, draft: "" };
+  }
+  const preset = matchesHourPreset(md);
+  return {
+    value: md,
+    customOpen: !preset,
+    draft: !preset ? formatManDayInputDraft(md) : "",
+  };
 }
 
 function formatModalDateLabel(iso: string): string {
@@ -193,7 +247,9 @@ export default function CalendarScreen({ onEditProfile }: Props) {
   const [modalStep, setModalStep] = useState<ModalStep>("projectList");
   const [customProjectName, setCustomProjectName] = useState("");
   const [modalProjectName, setModalProjectName] = useState("");
-  const [selectedHour, setSelectedHour] = useState<HourOption | null>(null);
+  const [manDayValue, setManDayValue] = useState<number | null>(null);
+  const [customManDayOpen, setCustomManDayOpen] = useState(false);
+  const [customManDayDraft, setCustomManDayDraft] = useState("");
   const [saveInProgress, setSaveInProgress] = useState(false);
   const [activeProjects, setActiveProjects] = useState<ActiveProjectOption[]>(
     []
@@ -305,7 +361,9 @@ export default function CalendarScreen({ onEditProfile }: Props) {
     setModalStep("projectList");
     setCustomProjectName("");
     setModalProjectName("");
-    setSelectedHour(null);
+    setManDayValue(null);
+    setCustomManDayOpen(false);
+    setCustomManDayDraft("");
     setSaveInProgress(false);
   }
 
@@ -316,7 +374,9 @@ export default function CalendarScreen({ onEditProfile }: Props) {
     setSelectedIso(iso);
     setCustomProjectName("");
     setModalProjectName("");
-    setSelectedHour(null);
+    setManDayValue(null);
+    setCustomManDayOpen(false);
+    setCustomManDayDraft("");
     const existing = entriesByIso[iso];
     if (existing) {
       const match = activeProjects.find(
@@ -324,7 +384,10 @@ export default function CalendarScreen({ onEditProfile }: Props) {
       );
       if (match) {
         setModalProjectName(match.project_name);
-        setSelectedHour(normalizeHour(existing.manDay));
+        const seeded = seedManDayStateFromExisting(existing.manDay);
+        setManDayValue(seeded.value);
+        setCustomManDayOpen(seeded.customOpen);
+        setCustomManDayDraft(seeded.draft);
         setModalStep("hours");
       } else {
         setCustomProjectName(existing.project);
@@ -353,9 +416,14 @@ export default function CalendarScreen({ onEditProfile }: Props) {
     setModalProjectName(projectName);
     const existing = entriesByIso[modalIso];
     if (existing && existing.project === projectName) {
-      setSelectedHour(normalizeHour(existing.manDay));
+      const seeded = seedManDayStateFromExisting(existing.manDay);
+      setManDayValue(seeded.value);
+      setCustomManDayOpen(seeded.customOpen);
+      setCustomManDayDraft(seeded.draft);
     } else {
-      setSelectedHour(null);
+      setManDayValue(null);
+      setCustomManDayOpen(false);
+      setCustomManDayDraft("");
     }
     setModalStep("hours");
   }
@@ -367,20 +435,41 @@ export default function CalendarScreen({ onEditProfile }: Props) {
     setModalProjectName(name);
     const existing = entriesByIso[modalIso];
     if (existing && existing.project === name) {
-      setSelectedHour(normalizeHour(existing.manDay));
+      const seeded = seedManDayStateFromExisting(existing.manDay);
+      setManDayValue(seeded.value);
+      setCustomManDayOpen(seeded.customOpen);
+      setCustomManDayDraft(seeded.draft);
     } else {
-      setSelectedHour(null);
+      setManDayValue(null);
+      setCustomManDayOpen(false);
+      setCustomManDayDraft("");
     }
     setModalStep("hours");
   }
 
   function backToProjectListFromHours() {
     setModalStep("projectList");
-    setSelectedHour(null);
+    setManDayValue(null);
+    setCustomManDayOpen(false);
+    setCustomManDayDraft("");
+  }
+
+  function openCustomManDayPanel() {
+    setCustomManDayOpen(true);
+    setCustomManDayDraft((prev) => {
+      if (prev.trim() !== "") return prev;
+      return manDayValue != null ? formatManDayInputDraft(manDayValue) : "";
+    });
   }
 
   async function saveHoursEntry() {
-    if (!modalIso || selectedHour === null || saveInProgress) return;
+    if (!modalIso || saveInProgress) return;
+    const resolved = resolveManDayForSave(
+      customManDayOpen,
+      manDayValue,
+      customManDayDraft
+    );
+    if (resolved === null || !Number.isFinite(resolved) || resolved <= 0) return;
     const y = Number(cursor.y);
     const m0 = Number(cursor.m0);
     if (!dateEntryBelongsToCalendarMonth(modalIso, y, m0)) {
@@ -415,7 +504,7 @@ export default function CalendarScreen({ onEditProfile }: Props) {
       const entry: WorkerDayEntry = {
         date: modalIso,
         project: ensured.project_name,
-        manDay: selectedHour,
+        manDay: resolved,
       };
       const next = upsertWorkerDayEntry(dayEntries, entry);
       saveWorkerDayEntries(next);
@@ -449,7 +538,16 @@ export default function CalendarScreen({ onEditProfile }: Props) {
     closeProjectModal();
   }
 
-  const saveHoursDisabled = selectedHour === null || saveInProgress;
+  const resolvedManDayForSave = resolveManDayForSave(
+    customManDayOpen,
+    manDayValue,
+    customManDayDraft
+  );
+  const saveHoursDisabled =
+    resolvedManDayForSave === null ||
+    !Number.isFinite(resolvedManDayForSave) ||
+    resolvedManDayForSave <= 0 ||
+    saveInProgress;
 
   function goPrevMonth() {
     closeProjectModal();
@@ -761,21 +859,73 @@ export default function CalendarScreen({ onEditProfile }: Props) {
                   </p>
 
                   <div className="grid grid-cols-2 gap-2">
-                    {HOUR_OPTIONS.map((h) => (
-                      <button
-                        key={h}
-                        type="button"
-                        onClick={() => setSelectedHour(h)}
-                        className={`min-h-[3.25rem] rounded-xl border-2 text-lg font-bold transition active:scale-[0.99] ${
-                          selectedHour === h
-                            ? "border-teal-600 bg-teal-50 text-teal-950"
-                            : "border-slate-200 bg-slate-50 text-slate-900"
-                        }`}
-                      >
-                        {h}
-                      </button>
-                    ))}
+                    {HOUR_PRESETS.map((h) => {
+                      const selectedPreset =
+                        manDayValue != null &&
+                        matchesHourPreset(manDayValue) &&
+                        Math.abs(manDayValue - h) < 1e-9;
+                      return (
+                        <button
+                          key={h}
+                          type="button"
+                          onClick={() => {
+                            setManDayValue(h);
+                            setCustomManDayOpen(false);
+                            setCustomManDayDraft("");
+                          }}
+                          className={`min-h-[3.25rem] rounded-xl border-2 text-lg font-bold transition active:scale-[0.99] ${
+                            selectedPreset
+                              ? "border-teal-600 bg-teal-50 text-teal-950"
+                              : "border-slate-200 bg-slate-50 text-slate-900"
+                          }`}
+                        >
+                          {h}
+                        </button>
+                      );
+                    })}
                   </div>
+
+                  <button
+                    type="button"
+                    onClick={openCustomManDayPanel}
+                    className={`mt-3 min-h-[3.25rem] w-full rounded-xl border-2 px-4 text-base font-semibold transition active:scale-[0.99] ${
+                      customManDayOpen ||
+                      (manDayValue != null && !matchesHourPreset(manDayValue))
+                        ? "border-teal-600 bg-teal-50 text-teal-950"
+                        : "border-dashed border-slate-300 bg-white text-slate-800 active:bg-slate-50"
+                    }`}
+                  >
+                    {LABEL_MAN_DAY_DIRECT_INPUT}
+                  </button>
+
+                  {customManDayOpen ? (
+                    <label className="mt-3 block">
+                      <span className="mb-1.5 block text-xs font-semibold text-slate-600">
+                        {
+                          "\uACF5\uC218 \uC9C1\uC811\uC785\uB825 (\uC22B\uC790\u00B7\uC18C\uC218\uC810, 0 \uCD08\uACFC)"
+                        }
+                      </span>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        enterKeyHint="done"
+                        value={customManDayDraft}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                          const s = sanitizeManDayNumericInput(
+                            e.target.value
+                          );
+                          setCustomManDayDraft(s);
+                          setManDayValue(parsePositiveManDayDraft(s));
+                        }}
+                        className="min-h-[3.25rem] w-full rounded-xl border-2 border-slate-200 bg-white px-4 font-mono text-base text-slate-900 outline-none ring-teal-500/30 focus:border-teal-500 focus:ring-4"
+                        placeholder="0.75"
+                        autoComplete="off"
+                        aria-label={
+                          "\uACF5\uC218 \uC9C1\uC811\uC785\uB825 (\uC22B\uC790\uC640 \uC18C\uC218\uC810\uB9CC)"
+                        }
+                      />
+                    </label>
+                  ) : null}
 
                   <div className="mt-6 flex gap-2">
                     <button

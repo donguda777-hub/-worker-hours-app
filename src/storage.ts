@@ -12,6 +12,25 @@ export type WorkerDayEntry = {
   manDay: number;
 };
 
+/** Supabase/Postgrest 오류 객체를 콘솔에 일관되게 남긴다. */
+function logWorkerDayEntriesSupabaseError(
+  label: string,
+  err: unknown
+): void {
+  if (err && typeof err === "object") {
+    const o = err as Record<string, unknown>;
+    console.error(label, {
+      message: typeof o.message === "string" ? o.message : undefined,
+      code: typeof o.code === "string" ? o.code : undefined,
+      details: typeof o.details === "string" ? o.details : undefined,
+      hint: typeof o.hint === "string" ? o.hint : undefined,
+      raw: err,
+    });
+    return;
+  }
+  console.error(label, err);
+}
+
 function coerceWorkerDayEntry(raw: unknown): WorkerDayEntry | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
@@ -117,7 +136,7 @@ export async function uploadWorkerDayEntryToSupabase(
       .eq("project_name", projectName)
       .limit(2);
     if (selErr != null) {
-      console.error(
+      logWorkerDayEntriesSupabaseError(
         "[Supabase] worker_day_entries lookup failed",
         selErr
       );
@@ -137,7 +156,7 @@ export async function uploadWorkerDayEntryToSupabase(
         .update(payload)
         .eq("id", existingId);
       if (upErr != null) {
-        console.error(
+        logWorkerDayEntriesSupabaseError(
           "[Supabase] worker_day_entries update failed",
           upErr
         );
@@ -153,7 +172,7 @@ export async function uploadWorkerDayEntryToSupabase(
       .from("worker_day_entries")
       .insert(payload);
     if (insErr != null) {
-      console.error(
+      logWorkerDayEntriesSupabaseError(
         "[Supabase] worker_day_entries insert failed",
         insErr
       );
