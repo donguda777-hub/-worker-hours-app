@@ -18,7 +18,8 @@ import {
 } from "../storage";
 import {
   ensureWorkerProjectInSupabase,
-  fetchProjectOptionsForWorker,
+  fetchMonthlyProjectOptionsForWorker,
+  monthKeyFromIsoDate,
   normalizeProjectName,
   type ActiveProjectOption,
 } from "../lib/projectsFromSupabase";
@@ -254,28 +255,14 @@ export default function CalendarScreen({ onEditProfile }: Props) {
   const [activeProjects, setActiveProjects] = useState<ActiveProjectOption[]>(
     []
   );
-  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [projectsLoading, setProjectsLoading] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [showPwaPromo, setShowPwaPromo] = useState(() => !isStandalonePwa());
   const deferredPromptRef = useRef<BeforeInstallPromptEventExt | null>(null);
+  const projectsLoadIdRef = useRef(0);
   const [dayEntries, setDayEntries] = useState<WorkerDayEntry[]>(() =>
     loadWorkerDayEntries()
   );
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      setProjectsLoading(true);
-      const { projects } = await fetchProjectOptionsForWorker();
-      if (!cancelled) {
-        setActiveProjects(projects);
-        setProjectsLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     if (isStandalonePwa()) {
@@ -339,24 +326,8 @@ export default function CalendarScreen({ onEditProfile }: Props) {
     [cursor.y, cursor.m0]
   );
 
-  const reloadActiveProjects = useCallback(async () => {
-    const { projects } = await fetchProjectOptionsForWorker();
-    setActiveProjects(projects);
-  }, []);
-
-  const mergeProjectIntoList = useCallback((project_name: string) => {
-    setActiveProjects((prev) => {
-      if (prev.some((p) => p.project_name === project_name)) return prev;
-      return [
-        ...prev,
-        { id: `local:${project_name}`, project_name },
-      ].sort((a, b) =>
-        a.project_name.localeCompare(b.project_name, "ko")
-      );
-    });
-  }, []);
-
   function closeProjectModal() {
+    projectsLoadIdRef.current += 1;
     setModalIso(null);
     setModalStep("projectList");
     setCustomProjectName("");
@@ -365,23 +336,42 @@ export default function CalendarScreen({ onEditProfile }: Props) {
     setCustomManDayOpen(false);
     setCustomManDayDraft("");
     setSaveInProgress(false);
+    setProjectsLoading(false);
+    setActiveProjects([]);
   }
 
-  function openProjectModal(iso: string) {
+  async function openProjectModal(iso: string) {
     const y = Number(cursor.y);
     const m0 = Number(cursor.m0);
     if (!dateEntryBelongsToCalendarMonth(iso, y, m0)) return;
+
+    const loadId = ++projectsLoadIdRef.current;
+    const month = monthKeyFromIsoDate(iso);
+
     setSelectedIso(iso);
     setCustomProjectName("");
     setModalProjectName("");
     setManDayValue(null);
     setCustomManDayOpen(false);
     setCustomManDayDraft("");
+    setModalStep("projectList");
+    setModalIso(iso);
+    setActiveProjects([]);
+    setProjectsLoading(true);
+
+    const { projects } =
+      month != null
+        ? await fetchMonthlyProjectOptionsForWorker(month)
+        : { projects: [] as ActiveProjectOption[] };
+
+    if (loadId !== projectsLoadIdRef.current) return;
+
+    setActiveProjects(projects);
+    setProjectsLoading(false);
+
     const existing = entriesByIso[iso];
     if (existing) {
-      const match = activeProjects.find(
-        (p) => p.project_name === existing.project
-      );
+      const match = projects.find((p) => p.project_name === existing.project);
       if (match) {
         setModalProjectName(match.project_name);
         const seeded = seedManDayStateFromExisting(existing.manDay);
@@ -396,7 +386,6 @@ export default function CalendarScreen({ onEditProfile }: Props) {
     } else {
       setModalStep("projectList");
     }
-    setModalIso(iso);
   }
 
   function goToDirectInputStep() {
@@ -510,11 +499,7 @@ export default function CalendarScreen({ onEditProfile }: Props) {
       saveWorkerDayEntries(next);
       setDayEntries(loadWorkerDayEntries());
       await uploadWorkerDayEntryToSupabase(entry);
-      if (ensured.created) {
-        await reloadActiveProjects();
-      } else {
-        mergeProjectIntoList(ensured.project_name);
-      }
+      // 직접입력으로 projects에 추가돼도 monthly_projects에는 넣지 않음 → 목록에 병합하지 않음
       closeProjectModal();
     } finally {
       setSaveInProgress(false);

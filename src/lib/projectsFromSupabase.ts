@@ -11,10 +11,17 @@ export type EnsureWorkerProjectResult = {
   created: boolean;
 };
 
-export type ProjectOptionsSource = "supabase" | "local";
+export type ProjectOptionsSource = "supabase" | "local" | "none";
 
 export function normalizeProjectName(name: string): string {
   return name.trim().replace(/\s+/g, " ");
+}
+
+/** ISO 날짜(YYYY-MM-DD) → month 키(YYYY-MM) */
+export function monthKeyFromIsoDate(iso: string): string | null {
+  const key = iso.trim().slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(key)) return null;
+  return key;
 }
 
 /** Supabase PostgREST / client error 상세 로그 */
@@ -85,9 +92,100 @@ export function projectsFromLocalWorkerEntries(): ActiveProjectOption[] {
   );
 }
 
+function parseMonthlyProjectRow(row: unknown): ActiveProjectOption | null {
+  if (row == null || typeof row !== "object") return null;
+  const r = row as Record<string, unknown>;
+  const projectName = r.project_name;
+  if (
+    typeof projectName !== "string" ||
+    normalizeProjectName(projectName) === ""
+  ) {
+    return null;
+  }
+  const project_name = normalizeProjectName(projectName);
+  const idRaw = r.id;
+  const id =
+    typeof idRaw === "string" && idRaw.trim() !== ""
+      ? idRaw.trim()
+      : `monthly:${project_name}`;
+  return { id, project_name };
+}
+
+/**
+ * 월별 작업자 선택용 프로젝트 조회 (monthly_projects).
+ * 실패 시 throw — 호출부에서 빈 목록 처리 (projects 전체 fallback 금지).
+ */
+export async function fetchMonthlyProjectsFromSupabase(
+  month: string
+): Promise<ActiveProjectOption[]> {
+  const monthKey = month.trim();
+  if (!/^\d{4}-\d{2}$/.test(monthKey)) {
+    throw new Error(`Invalid month key: ${month}`);
+  }
+  const supabase = getSupabaseBrowserClient();
+  if (supabase == null) {
+    throw new Error("Supabase client not configured");
+  }
+  const { data, error } = await supabase
+    .from("monthly_projects")
+    .select("id, project_name, month")
+    .eq("month", monthKey)
+    .order("project_name", { ascending: true });
+  if (error) throw error;
+  const rows = Array.isArray(data) ? data : [];
+  const byName = new Map<string, ActiveProjectOption>();
+  for (const row of rows) {
+    const parsed = parseMonthlyProjectRow(row);
+    if (parsed == null) continue;
+    if (!byName.has(parsed.project_name)) {
+      byName.set(parsed.project_name, parsed);
+    }
+  }
+  const out = [...byName.values()].sort((a, b) =>
+    a.project_name.localeCompare(b.project_name, "ko")
+  );
+  console.log("[Supabase] monthly_projects fetch ok (worker)", {
+    month: monthKey,
+    count: out.length,
+  });
+  return out;
+}
+
+/**
+ * 해당 월 monthly_projects만 반환.
+ * 실패·미설정 시 빈 목록 (projects 전체 / local 전체 목록으로 fallback하지 않음).
+ */
+export async function fetchMonthlyProjectOptionsForWorker(
+  month: string
+): Promise<{
+  projects: ActiveProjectOption[];
+  source: ProjectOptionsSource;
+}> {
+  const monthKey = month.trim();
+  if (!/^\d{4}-\d{2}$/.test(monthKey)) {
+    console.error("[Supabase] monthly_projects fetch skipped: invalid month", {
+      month,
+    });
+    return { projects: [], source: "none" };
+  }
+  if (!isSupabaseConfigured()) {
+    console.error(
+      "[Supabase] monthly_projects fetch skipped: set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env.local"
+    );
+    return { projects: [], source: "none" };
+  }
+  try {
+    const projects = await fetchMonthlyProjectsFromSupabase(monthKey);
+    return { projects, source: "supabase" };
+  } catch (e) {
+    logSupabaseError("monthly_projects fetch failed (worker)", e);
+    return { projects: [], source: "none" };
+  }
+}
+
 /**
  * 활성 프로젝트 조회 (admin-app과 동일 테이블·컬럼).
- * 실패 시 throw — 호출부에서 local fallback 처리.
+ * 직접입력 ensure 경로 등에서 필요 시 사용. 선택 목록 표시용으로 쓰지 않음.
  */
 export async function fetchActiveProjectsFromSupabase(): Promise<
   ActiveProjectOption[]
@@ -112,7 +210,7 @@ export async function fetchActiveProjectsFromSupabase(): Promise<
   return out;
 }
 
-/** Supabase 우선, 실패·미설정 시 localStorage 공수 기록에서 목록 구성 */
+/** @deprecated 선택 목록은 fetchMonthlyProjectOptionsForWorker 사용 */
 export async function fetchProjectOptionsForWorker(): Promise<{
   projects: ActiveProjectOption[];
   source: ProjectOptionsSource;
