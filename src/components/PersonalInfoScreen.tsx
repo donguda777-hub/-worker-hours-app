@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SKILL_LEVELS, type SkillLevel } from "../constants";
 import {
   loadPersonalInfo,
@@ -15,24 +15,12 @@ const defaultSkill: SkillLevel = SKILL_LEVELS[0];
 const PRESET_COMPANY_NAMES = [
   "L&N",
   "\uBBFC\uC601",
-  "L-LINE",
   "\uAC1C\uC778\uC0AC\uC5C5\uC790",
 ] as const;
 
 type PresetCompanyName = (typeof PRESET_COMPANY_NAMES)[number];
 
-const COMPANY_OPTIONS: ReadonlyArray<
-  | { type: "preset"; label: PresetCompanyName }
-  | { type: "custom"; label: "\uC9C1\uC811 \uC785\uB825" }
-> = [
-  ...PRESET_COMPANY_NAMES.map((label) => ({
-    type: "preset" as const,
-    label,
-  })),
-  { type: "custom" as const, label: "\uC9C1\uC811 \uC785\uB825" },
-];
-
-type CompanyMode = "unset" | PresetCompanyName | "custom";
+type CompanyMode = "unset" | PresetCompanyName;
 
 function isPresetCompanyName(value: string): value is PresetCompanyName {
   return (PRESET_COMPANY_NAMES as readonly string[]).includes(value);
@@ -48,10 +36,7 @@ export default function PersonalInfoScreen({
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [companyMode, setCompanyMode] = useState<CompanyMode>("unset");
-  const [companyCustom, setCompanyCustom] = useState("");
-  const [companyCustomEditing, setCompanyCustomEditing] = useState(false);
   const [companyPickerOpen, setCompanyPickerOpen] = useState(false);
-  const companyInputRef = useRef<HTMLInputElement>(null);
   const [region, setRegion] = useState("");
   const [skillLevel, setSkillLevel] = useState<SkillLevel>(defaultSkill);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -63,18 +48,12 @@ export default function PersonalInfoScreen({
     setName(existing.name);
     setPhone(existing.phone);
     const cn = existing.companyName?.trim();
-    if (!cn || cn === "L&N") {
+    if (!cn) {
       setCompanyMode("L&N");
-      setCompanyCustom("");
-      setCompanyCustomEditing(false);
     } else if (isPresetCompanyName(cn)) {
       setCompanyMode(cn);
-      setCompanyCustom("");
-      setCompanyCustomEditing(false);
     } else {
-      setCompanyMode("custom");
-      setCompanyCustom(cn);
-      setCompanyCustomEditing(false);
+      setCompanyMode("unset");
     }
     setRegion(existing.region?.trim() ?? "");
     if ((SKILL_LEVELS as readonly string[]).includes(existing.skillLevel)) {
@@ -91,39 +70,13 @@ export default function PersonalInfoScreen({
     return () => window.removeEventListener("keydown", onKey);
   }, [companyPickerOpen]);
 
-  useEffect(() => {
-    if (!companyCustomEditing) return;
-    const el = companyInputRef.current;
-    if (!el) return;
-    el.focus();
-  }, [companyCustomEditing]);
-
   const autoUserId = useMemo(() => buildUserId(name, phone), [name, phone]);
 
-  const companyTriggerLabel = useMemo(() => {
-    if (companyMode === "custom") {
-      const t = companyCustom.trim();
-      return t.length > 0 ? t : "\uC9C1\uC811 \uC785\uB825";
-    }
-    if (companyMode !== "unset") return companyMode;
-    return "\uC120\uD0DD";
-  }, [companyMode, companyCustom]);
+  const companyTriggerLabel =
+    companyMode !== "unset" ? companyMode : "\uC120\uD0DD";
 
   const showUserIdPreview =
     name.trim().length > 0 && phone.replace(/\D/g, "").length > 0;
-
-  function handleCompanyInlineBlur() {
-    setCompanyCustomEditing(false);
-  }
-
-  function handleCompanyInlineKeyDown(
-    e: React.KeyboardEvent<HTMLInputElement>
-  ) {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      e.currentTarget.blur();
-    }
-  }
 
   function handleSave() {
     console.log("[workers save] button clicked");
@@ -149,17 +102,7 @@ export default function PersonalInfoScreen({
       );
       return;
     }
-    const companyName =
-      companyMode === "custom" ? companyCustom.trim() : companyMode;
-    if (companyMode === "custom" && !companyName) {
-      setSaveError(
-        "\uC5C5\uCCB4\uBA85\uC744 \uC785\uB825\uD574 \uC8FC\uC138\uC694."
-      );
-      return;
-    }
-    if (companyMode === "custom" && companyCustomEditing) {
-      setCompanyCustomEditing(false);
-    }
+    const companyName = companyMode;
 
     const regionTrimmed = region.trim();
     const payload: PersonalInfo = {
@@ -242,26 +185,13 @@ export default function PersonalInfoScreen({
               <span className="mb-1 block text-xs font-medium text-slate-700">
                 {"\uC5C5\uCCB4\uBA85"}
               </span>
-              {companyMode === "custom" && companyCustomEditing ? (
-                <input
-                  ref={companyInputRef}
-                  type="text"
-                  autoComplete="organization"
-                  value={companyCustom}
-                  onChange={(e) => setCompanyCustom(e.target.value)}
-                  onBlur={handleCompanyInlineBlur}
-                  onKeyDown={handleCompanyInlineKeyDown}
-                  className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-left text-sm font-medium text-slate-900 outline-none ring-teal-500/0 transition focus:border-teal-500 focus:bg-white focus:ring-2"
-                />
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setCompanyPickerOpen(true)}
-                  className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-left text-sm font-medium text-slate-900 outline-none ring-teal-500/0 transition focus:border-teal-500 focus:bg-white focus:ring-2"
-                >
-                  {companyTriggerLabel}
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => setCompanyPickerOpen(true)}
+                className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-left text-sm font-medium text-slate-900 outline-none ring-teal-500/0 transition focus:border-teal-500 focus:bg-white focus:ring-2"
+              >
+                {companyTriggerLabel}
+              </button>
             </div>
 
             <label className="block">
@@ -368,27 +298,14 @@ export default function PersonalInfoScreen({
               </p>
             </div>
             <ul className="max-h-[min(50vh,16rem)] overflow-y-auto py-1 sm:max-h-72">
-              {COMPANY_OPTIONS.map((opt) => {
-                const active =
-                  opt.type === "custom"
-                    ? companyMode === "custom"
-                    : companyMode === opt.label;
-                const optionKey =
-                  opt.type === "custom" ? "custom" : opt.label;
+              {PRESET_COMPANY_NAMES.map((label) => {
+                const active = companyMode === label;
                 return (
-                  <li key={optionKey}>
+                  <li key={label}>
                     <button
                       type="button"
                       onClick={() => {
-                        if (opt.type === "preset") {
-                          setCompanyMode(opt.label);
-                          setCompanyCustom("");
-                          setCompanyCustomEditing(false);
-                        } else {
-                          setCompanyMode("custom");
-                          setCompanyCustom("");
-                          setCompanyCustomEditing(true);
-                        }
+                        setCompanyMode(label);
                         setCompanyPickerOpen(false);
                       }}
                       className={`flex w-full items-center justify-between px-4 py-3 text-left text-sm transition active:bg-slate-50 ${
@@ -397,7 +314,7 @@ export default function PersonalInfoScreen({
                           : "text-slate-800"
                       }`}
                     >
-                      <span>{opt.label}</span>
+                      <span>{label}</span>
                       {active ? (
                         <span className="text-xs text-teal-600" aria-hidden>
                           {"\u2713"}
