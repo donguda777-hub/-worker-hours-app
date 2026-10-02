@@ -613,6 +613,13 @@ export default function CalendarScreen({ onEditProfile }: Props) {
       window.alert(MSG_TIMESHEET_SUBMIT_FAILED);
       return;
     }
+    if (
+      cursor.y !== timesheetSubmitDraft.year ||
+      cursor.m0 !== timesheetSubmitDraft.month0
+    ) {
+      window.alert(MSG_TIMESHEET_SUBMIT_FAILED);
+      return;
+    }
     const submitMonth = `${timesheetSubmitDraft.year}-${String(
       timesheetSubmitDraft.month0 + 1
     ).padStart(2, "0")}`;

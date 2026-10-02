@@ -81,6 +81,56 @@ export async function captureTimesheetImage(
   return null;
 }
 
+type ExistingTimesheetSubmission = {
+  id: string | number;
+  image_path: string;
+};
+
+async function removeTimesheetImage(imagePath: string): Promise<void> {
+  const path = imagePath.trim();
+  if (path === "") return;
+  const supabase = getSupabaseBrowserClient();
+  if (supabase == null) return;
+  const { error } = await supabase.storage.from(TIMESHEET_BUCKET).remove([path]);
+  if (error) {
+    logSupabaseError("timesheet image remove failed", error);
+  }
+}
+
+/**
+ * 같은 작업자 이름·전화·submit_month의 마지막 제출 행을 찾는다.
+ * 조회에 실패하면 null. 없으면 undefined.
+ */
+async function findLatestTimesheetSubmission(
+  workerName: string,
+  workerPhone: string,
+  submitMonth: string
+): Promise<ExistingTimesheetSubmission | null | undefined> {
+  const supabase = getSupabaseBrowserClient();
+  if (supabase == null) return null;
+  const { data, error } = await supabase
+    .from("timesheet_submissions")
+    .select("id, image_path, created_at")
+    .eq("worker_name", workerName)
+    .eq("worker_phone", workerPhone)
+    .eq("submit_month", submitMonth)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  if (error) {
+    logSupabaseError("timesheet_submissions lookup failed", error);
+    return null;
+  }
+  const row = Array.isArray(data) ? data[0] : null;
+  if (row == null || typeof row !== "object") return undefined;
+  const id = (row as { id?: unknown }).id;
+  if (typeof id !== "string" && typeof id !== "number") return undefined;
+  const imagePath = (row as { image_path?: unknown }).image_path;
+  return {
+    id,
+    image_path: typeof imagePath === "string" ? imagePath : "",
+  };
+}
+
 export async function submitTimesheetImage(input: {
   workerName: string;
   workerPhone: string;
@@ -93,6 +143,13 @@ export async function submitTimesheetImage(input: {
 }): Promise<boolean> {
   const supabase = getSupabaseBrowserClient();
   if (supabase == null) return false;
+  const existing = await findLatestTimesheetSubmission(
+    input.workerName,
+    input.workerPhone,
+    input.submitMonth
+  );
+  if (existing === null) return false;
+
   const imagePath = buildTimesheetImagePath(
     input.submitMonth,
     input.workerToken,
@@ -115,22 +172,55 @@ export async function submitTimesheetImage(input: {
     return false;
   }
 
+  const payload = {
+    worker_name: input.workerName,
+    worker_phone: input.workerPhone,
+    company: input.company,
+    submit_month: input.submitMonth,
+    total_gongsu: input.totalGongsu,
+    image_path: imagePath,
+    created_at: new Date().toISOString(),
+  };
+
   try {
-    const { error } = await supabase.from("timesheet_submissions").insert({
-      worker_name: input.workerName,
-      worker_phone: input.workerPhone,
-      company: input.company,
-      submit_month: input.submitMonth,
-      total_gongsu: input.totalGongsu,
-      image_path: imagePath,
-    });
-    if (error) {
-      logSupabaseError("timesheet_submissions insert failed", error);
+    if (existing == null) {
+      const { error } = await supabase.from("timesheet_submissions").insert(payload);
+      if (error) {
+        logSupabaseError("timesheet_submissions insert failed", error);
+        await removeTimesheetImage(imagePath);
+        return false;
+      }
+      return true;
+    }
+
+    const previousImagePath = existing.image_path;
+    const { data: updatedRows, error } = await supabase
+      .from("timesheet_submissions")
+      .update(payload)
+      .eq("id", existing.id)
+      .eq("worker_name", input.workerName)
+      .eq("worker_phone", input.workerPhone)
+      .eq("submit_month", input.submitMonth)
+      .select("id");
+    const updatedCount = Array.isArray(updatedRows) ? updatedRows.length : 0;
+    if (error || updatedCount !== 1) {
+      logSupabaseError("timesheet_submissions update failed", error ?? {
+        message: "update affected no rows",
+        code: "zero_rows",
+      });
+      await removeTimesheetImage(imagePath);
       return false;
+    }
+    if (
+      previousImagePath.trim() !== "" &&
+      previousImagePath.trim() !== imagePath
+    ) {
+      await removeTimesheetImage(previousImagePath);
     }
     return true;
   } catch (e) {
-    logSupabaseError("timesheet_submissions insert failed", e);
+    logSupabaseError("timesheet_submissions write failed", e);
+    await removeTimesheetImage(imagePath);
     return false;
   }
 }
