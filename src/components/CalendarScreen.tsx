@@ -22,6 +22,7 @@ import {
   monthKeyFromIsoDate,
   type ActiveProjectOption,
 } from "../lib/projectsFromSupabase";
+import { submitProjectRequest } from "../lib/submitProjectRequest";
 import { getMonthGrid, parseISODate, toISODate } from "../utils/date";
 
 const HOUR_PRESETS = [0.5, 1, 1.5, 2] as const;
@@ -30,6 +31,13 @@ type ModalStep = "projectList" | "hours";
 
 /** 공수 선택 단계: 숫자 직접 입력 */
 const LABEL_MAN_DAY_DIRECT_INPUT = "\uC9C1\uC811\uC785\uB825";
+const LABEL_PROJECT_ADD_REQUEST = "\uD504\uB85C\uC81D\uD2B8 \uCD94\uAC00 \uC694\uCCAD";
+const MSG_PROJECT_REQUEST_NAME_REQUIRED =
+  "\uD504\uB85C\uC81D\uD2B8\uBA85\uC744 \uC785\uB825\uD574\uC8FC\uC138\uC694.";
+const MSG_PROJECT_REQUEST_SENT =
+  "\uD504\uB85C\uC81D\uD2B8 \uCD94\uAC00 \uC694\uCCAD\uC774 \uC804\uC1A1\uB418\uC5C8\uC2B5\uB2C8\uB2E4.";
+const MSG_PROJECT_REQUEST_FAILED =
+  "\uC694\uCCAD \uC804\uC1A1\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uC2DC\uB3C4\uD574\uC8FC\uC138\uC694.";
 
 function matchesHourPreset(n: number): boolean {
   return HOUR_PRESETS.some((h) => Math.abs(h - n) < 1e-9);
@@ -249,6 +257,14 @@ export default function CalendarScreen({ onEditProfile }: Props) {
   const [customManDayOpen, setCustomManDayOpen] = useState(false);
   const [customManDayDraft, setCustomManDayDraft] = useState("");
   const [saveInProgress, setSaveInProgress] = useState(false);
+  const [projectRequestOpen, setProjectRequestOpen] = useState(false);
+  const [projectRequestName, setProjectRequestName] = useState("");
+  const [projectRequestSending, setProjectRequestSending] = useState(false);
+  const [projectRequestNotice, setProjectRequestNotice] = useState<
+    string | null
+  >(null);
+  const projectRequestLockRef = useRef(false);
+  const projectRequestGenRef = useRef(0);
   const [activeProjects, setActiveProjects] = useState<ActiveProjectOption[]>(
     []
   );
@@ -334,6 +350,10 @@ export default function CalendarScreen({ onEditProfile }: Props) {
     setSaveInProgress(false);
     setProjectsLoading(false);
     setActiveProjects([]);
+    setProjectRequestOpen(false);
+    setProjectRequestName("");
+    setProjectRequestNotice(null);
+    projectRequestGenRef.current += 1;
   }
 
   async function openProjectModal(iso: string) {
@@ -353,6 +373,10 @@ export default function CalendarScreen({ onEditProfile }: Props) {
     setModalIso(iso);
     setActiveProjects([]);
     setProjectsLoading(true);
+    setProjectRequestOpen(false);
+    setProjectRequestName("");
+    setProjectRequestNotice(null);
+    projectRequestGenRef.current += 1;
 
     const { projects } =
       month != null
@@ -400,6 +424,51 @@ export default function CalendarScreen({ onEditProfile }: Props) {
     setManDayValue(null);
     setCustomManDayOpen(false);
     setCustomManDayDraft("");
+  }
+
+  async function sendProjectAddRequest() {
+    if (projectRequestLockRef.current) return;
+    const projectName = projectRequestName.trim();
+    if (!projectName) {
+      setProjectRequestNotice(MSG_PROJECT_REQUEST_NAME_REQUIRED);
+      return;
+    }
+    const profile = loadPersonalInfo();
+    const workerName = profile?.name.trim() ?? "";
+    const workerPhone = profile?.phone.trim() ?? "";
+    const company =
+      profile?.companyName != null && profile.companyName.trim() !== ""
+        ? profile.companyName.trim()
+        : "L&N";
+    if (!workerName || !workerPhone) {
+      setProjectRequestNotice(MSG_PROJECT_REQUEST_FAILED);
+      return;
+    }
+    const requestMonth = `${cursor.y}-${String(cursor.m0 + 1).padStart(2, "0")}`;
+    const requestGen = projectRequestGenRef.current;
+    projectRequestLockRef.current = true;
+    setProjectRequestSending(true);
+    setProjectRequestNotice(null);
+    try {
+      const ok = await submitProjectRequest({
+        workerName,
+        workerPhone,
+        company,
+        projectName,
+        requestMonth,
+      });
+      if (requestGen !== projectRequestGenRef.current) return;
+      if (!ok) {
+        setProjectRequestNotice(MSG_PROJECT_REQUEST_FAILED);
+        return;
+      }
+      setProjectRequestOpen(false);
+      setProjectRequestName("");
+      setProjectRequestNotice(MSG_PROJECT_REQUEST_SENT);
+    } finally {
+      projectRequestLockRef.current = false;
+      setProjectRequestSending(false);
+    }
   }
 
   function openCustomManDayPanel() {
@@ -720,6 +789,60 @@ export default function CalendarScreen({ onEditProfile }: Props) {
                       ))}
                     </div>
                   )}
+
+                  <button
+                    type="button"
+                    disabled={projectRequestSending}
+                    onClick={() => {
+                      setProjectRequestOpen(true);
+                      setProjectRequestNotice(null);
+                    }}
+                    className="mt-4 min-h-[3.25rem] w-full rounded-xl border-2 border-dashed border-slate-300 bg-white px-4 text-base font-semibold text-slate-800 transition active:scale-[0.99] active:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {LABEL_PROJECT_ADD_REQUEST}
+                  </button>
+
+                  {projectRequestOpen ? (
+                    <div className="mt-3">
+                      <label className="block">
+                        <span className="mb-1.5 block text-xs font-semibold text-slate-600">
+                          {"\uD504\uB85C\uC81D\uD2B8\uBA85"}
+                        </span>
+                        <input
+                          type="text"
+                          value={projectRequestName}
+                          disabled={projectRequestSending}
+                          onChange={(e) => setProjectRequestName(e.target.value)}
+                          className="min-h-[3.25rem] w-full rounded-xl border-2 border-slate-200 bg-white px-4 text-base text-slate-900 outline-none ring-teal-500/30 focus:border-teal-500 focus:ring-4 disabled:bg-slate-50"
+                          placeholder={"\uD504\uB85C\uC81D\uD2B8\uBA85\uC744 \uC785\uB825"}
+                          autoComplete="off"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        disabled={projectRequestSending}
+                        onClick={() => void sendProjectAddRequest()}
+                        className="mt-3 min-h-[3.25rem] w-full rounded-xl bg-teal-600 text-base font-semibold text-white shadow-sm active:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none"
+                      >
+                        {projectRequestSending
+                          ? "\uC804\uC1A1 \uC911\u2026"
+                          : "\uC694\uCCAD \uBCF4\uB0B4\uAE30"}
+                      </button>
+                    </div>
+                  ) : null}
+
+                  {projectRequestNotice ? (
+                    <p
+                      className={`mt-3 text-center text-sm leading-snug ${
+                        projectRequestNotice === MSG_PROJECT_REQUEST_SENT
+                          ? "text-teal-700"
+                          : "text-red-600"
+                      }`}
+                      role="status"
+                    >
+                      {projectRequestNotice}
+                    </p>
+                  ) : null}
 
                   <div className="mt-4">
                     <button
