@@ -20,17 +20,15 @@ import {
   ensureWorkerProjectInSupabase,
   fetchMonthlyProjectOptionsForWorker,
   monthKeyFromIsoDate,
-  normalizeProjectName,
   type ActiveProjectOption,
 } from "../lib/projectsFromSupabase";
 import { getMonthGrid, parseISODate, toISODate } from "../utils/date";
 
 const HOUR_PRESETS = [0.5, 1, 1.5, 2] as const;
 
-type ModalStep = "projectList" | "projectInput" | "hours";
+type ModalStep = "projectList" | "hours";
 
-const LABEL_DIRECT_INPUT = "\uC9C1\uC811 \uC785\uB825";
-/** 공수 선택 단계: 숫자 직접 입력 (프로젝트명 직접입력과 구분되는 화면 단계) */
+/** 공수 선택 단계: 숫자 직접 입력 */
 const LABEL_MAN_DAY_DIRECT_INPUT = "\uC9C1\uC811\uC785\uB825";
 
 function matchesHourPreset(n: number): boolean {
@@ -246,7 +244,6 @@ export default function CalendarScreen({ onEditProfile }: Props) {
   const [selectedIso, setSelectedIso] = useState<string | null>(null);
   const [modalIso, setModalIso] = useState<string | null>(null);
   const [modalStep, setModalStep] = useState<ModalStep>("projectList");
-  const [customProjectName, setCustomProjectName] = useState("");
   const [modalProjectName, setModalProjectName] = useState("");
   const [manDayValue, setManDayValue] = useState<number | null>(null);
   const [customManDayOpen, setCustomManDayOpen] = useState(false);
@@ -330,7 +327,6 @@ export default function CalendarScreen({ onEditProfile }: Props) {
     projectsLoadIdRef.current += 1;
     setModalIso(null);
     setModalStep("projectList");
-    setCustomProjectName("");
     setModalProjectName("");
     setManDayValue(null);
     setCustomManDayOpen(false);
@@ -349,7 +345,6 @@ export default function CalendarScreen({ onEditProfile }: Props) {
     const month = monthKeyFromIsoDate(iso);
 
     setSelectedIso(iso);
-    setCustomProjectName("");
     setModalProjectName("");
     setManDayValue(null);
     setCustomManDayOpen(false);
@@ -379,25 +374,8 @@ export default function CalendarScreen({ onEditProfile }: Props) {
         setCustomManDayOpen(seeded.customOpen);
         setCustomManDayDraft(seeded.draft);
         setModalStep("hours");
-      } else {
-        setCustomProjectName(existing.project);
-        setModalStep("projectList");
       }
-    } else {
-      setModalStep("projectList");
     }
-  }
-
-  function goToDirectInputStep() {
-    if (!modalIso) return;
-    const existing = entriesByIso[modalIso];
-    setCustomProjectName(existing?.project ?? "");
-    setModalStep("projectInput");
-  }
-
-  function backToProjectListStep() {
-    setModalStep("projectList");
-    setCustomProjectName("");
   }
 
   function selectProjectFromList(projectName: string) {
@@ -405,25 +383,6 @@ export default function CalendarScreen({ onEditProfile }: Props) {
     setModalProjectName(projectName);
     const existing = entriesByIso[modalIso];
     if (existing && existing.project === projectName) {
-      const seeded = seedManDayStateFromExisting(existing.manDay);
-      setManDayValue(seeded.value);
-      setCustomManDayOpen(seeded.customOpen);
-      setCustomManDayDraft(seeded.draft);
-    } else {
-      setManDayValue(null);
-      setCustomManDayOpen(false);
-      setCustomManDayDraft("");
-    }
-    setModalStep("hours");
-  }
-
-  function goToHoursStepFromInput() {
-    if (!modalIso) return;
-    const name = normalizeProjectName(customProjectName);
-    if (!name) return;
-    setModalProjectName(name);
-    const existing = entriesByIso[modalIso];
-    if (existing && existing.project === name) {
       const seeded = seedManDayStateFromExisting(existing.manDay);
       setManDayValue(seeded.value);
       setCustomManDayOpen(seeded.customOpen);
@@ -505,9 +464,6 @@ export default function CalendarScreen({ onEditProfile }: Props) {
       setSaveInProgress(false);
     }
   }
-
-  const nextFromInputDisabled =
-    normalizeProjectName(customProjectName) === "";
 
   function deleteDayEntry() {
     if (!modalIso) return;
@@ -748,9 +704,7 @@ export default function CalendarScreen({ onEditProfile }: Props) {
                     </p>
                   ) : activeProjects.length === 0 ? (
                     <p className="whitespace-pre-line py-6 text-center text-sm leading-relaxed text-slate-500">
-                      {
-                        "\uB4F1\uB85D\uB41C \uD504\uB85C\uC81D\uD2B8\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4. \uC544\uB798 \uC9C1\uC811 \uC785\uB825\uC744 \uC0AC\uC6A9\uD558\uC138\uC694."
-                      }
+                      {"\uB4F1\uB85D\uB41C \uD504\uB85C\uC81D\uD2B8\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4."}
                     </p>
                   ) : (
                     <div className="flex max-h-[min(40dvh,50svh)] flex-col gap-2 overflow-y-auto">
@@ -767,14 +721,6 @@ export default function CalendarScreen({ onEditProfile }: Props) {
                     </div>
                   )}
 
-                  <button
-                    type="button"
-                    onClick={goToDirectInputStep}
-                    className="mt-4 min-h-[3.25rem] w-full rounded-xl border-2 border-dashed border-slate-300 bg-white px-4 text-base font-semibold text-slate-800 transition active:scale-[0.99] active:bg-slate-50"
-                  >
-                    {LABEL_DIRECT_INPUT}
-                  </button>
-
                   <div className="mt-4">
                     <button
                       type="button"
@@ -784,55 +730,6 @@ export default function CalendarScreen({ onEditProfile }: Props) {
                       {"\uCDE8\uC18C"}
                     </button>
                   </div>
-                </>
-              ) : modalStep === "projectInput" ? (
-                <>
-                  <p className="mb-3 mt-1 text-center text-sm text-slate-500">
-                    {
-                      "\uD504\uB85C\uC81D\uD2B8\uBA85\uC744 \uC785\uB825\uD558\uC138\uC694"
-                    }
-                  </p>
-
-                  <label className="block">
-                    <span className="mb-1.5 block text-xs font-semibold text-slate-600">
-                      {"\uD504\uB85C\uC81D\uD2B8\uBA85"}
-                    </span>
-                    <input
-                      type="text"
-                      value={customProjectName}
-                      onChange={(e) => setCustomProjectName(e.target.value)}
-                      className="min-h-[3.25rem] w-full rounded-xl border-2 border-slate-200 bg-white px-4 text-base text-slate-900 outline-none ring-teal-500/30 focus:border-teal-500 focus:ring-4"
-                      placeholder={
-                        "\uD504\uB85C\uC81D\uD2B8\uBA85\uC744 \uC785\uB825"
-                      }
-                      autoComplete="off"
-                    />
-                  </label>
-
-                  <div className="mt-6 flex gap-2">
-                    <button
-                      type="button"
-                      onClick={backToProjectListStep}
-                      className="min-h-[3.25rem] flex-1 rounded-xl border-2 border-slate-200 bg-white text-base font-semibold text-slate-800 active:bg-slate-50"
-                    >
-                      {"\uC774\uC804"}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={nextFromInputDisabled}
-                      onClick={goToHoursStepFromInput}
-                      className="min-h-[3.25rem] flex-1 rounded-xl bg-teal-600 text-base font-semibold text-white shadow-sm active:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none"
-                    >
-                      {"\uB2E4\uC74C"}
-                    </button>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={closeProjectModal}
-                    className="mt-3 min-h-[2.75rem] w-full rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 active:bg-slate-50"
-                  >
-                    {"\uCDE8\uC18C"}
-                  </button>
                 </>
               ) : (
                 <>
