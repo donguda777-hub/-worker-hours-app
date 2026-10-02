@@ -13,6 +13,7 @@ import {
   loadWorkerDayEntries,
   restoreWorkerDayEntriesFromSupabaseIfMissing,
   saveWorkerDayEntries,
+  softDeleteWorkerDayEntryFromSupabase,
   uploadWorkerDayEntryToSupabase,
   upsertWorkerDayEntry,
   type WorkerDayEntry,
@@ -574,6 +575,7 @@ export default function CalendarScreen({ onEditProfile }: Props) {
     const next = deleteWorkerDayEntry(dayEntries, modalIso);
     saveWorkerDayEntries(next);
     setDayEntries(loadWorkerDayEntries());
+    void softDeleteWorkerDayEntryFromSupabase(modalIso);
     closeProjectModal();
   }
 

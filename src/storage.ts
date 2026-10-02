@@ -81,10 +81,22 @@ export function loadWorkerDayEntries(): WorkerDayEntry[] {
   }
 }
 
+function workerDayEntryIds(data: unknown): string[] {
+  if (!Array.isArray(data)) return [];
+  const ids: string[] = [];
+  for (const row of data) {
+    if (!row || typeof row !== "object") continue;
+    const id = (row as { id?: unknown }).id;
+    if (typeof id === "string" && id !== "") ids.push(id);
+  }
+  return ids;
+}
+
 /**
  * 로컬에 반영된 1건을 Supabase에 반영한다.
- * `worker_id` + `work_date` + `project_name` 기준으로 기존 행이 있으면 update, 없으면 insert.
- * localStorage 저장과 분리 — 캘린더「저장」버튼에서만 호출할 것.
+ * 현재 기록은 `worker_id` + `work_date` 한 건이다. project_name은 키로 쓰지 않는다.
+ * 현재 행이 있으면 update만 하고, 없으면 삭제된 같은 날짜 행을 다시 연다.
+ * 둘 다 없을 때만 insert한다. localStorage 저장과 분리 — 캘린더「저장」버튼에서만 호출할 것.
  */
 export async function uploadWorkerDayEntryToSupabase(
   entry: WorkerDayEntry
@@ -128,40 +140,84 @@ export async function uploadWorkerDayEntryToSupabase(
       work_hours: entry.manDay,
       memo: null as string | null,
     };
-    const { data: found, error: selErr } = await supabase
-      .from("worker_day_entries")
-      .select("id")
-      .eq("worker_id", workerId)
-      .eq("work_date", workDate)
-      .eq("project_name", projectName)
-      .limit(2);
-    if (selErr != null) {
-      logWorkerDayEntriesSupabaseError(
-        "[Supabase] worker_day_entries lookup failed",
-        selErr
-      );
-      return;
-    }
-    const rows = Array.isArray(found) ? found : [];
-    if (rows.length > 1) {
-      console.error(
-        "[Supabase] worker_day_entries: duplicate rows for natural key; updating first id only",
-        { workerId, workDate, projectName }
-      );
-    }
-    const existingId = (rows[0] as { id?: unknown } | undefined)?.id;
-    if (existingId != null && existingId !== "") {
+    const writeCurrentRow = async (id: string): Promise<boolean> => {
       const { error: upErr } = await supabase
         .from("worker_day_entries")
-        .update(payload)
-        .eq("id", existingId);
+        .update({ ...payload, deleted_at: null })
+        .eq("id", id);
       if (upErr != null) {
         logWorkerDayEntriesSupabaseError(
           "[Supabase] worker_day_entries update failed",
           upErr
         );
-        return;
+        return false;
       }
+      return true;
+    };
+
+    const { data: liveFound, error: liveErr } = await supabase
+      .from("worker_day_entries")
+      .select("id, updated_at")
+      .eq("worker_id", workerId)
+      .eq("work_date", workDate)
+      .is("deleted_at", null)
+      .order("updated_at", { ascending: false });
+    if (liveErr != null) {
+      logWorkerDayEntriesSupabaseError(
+        "[Supabase] worker_day_entries lookup failed",
+        liveErr
+      );
+      return;
+    }
+    const liveIds = workerDayEntryIds(liveFound);
+    if (liveIds.length > 0) {
+      const kept = await writeCurrentRow(liveIds[0]);
+      if (!kept) return;
+      if (liveIds.length > 1) {
+        console.error(
+          "[Supabase] worker_day_entries: duplicate live rows for worker_id + work_date; keeping latest updated_at",
+          { workerId, workDate }
+        );
+        const { error: extraErr } = await supabase
+          .from("worker_day_entries")
+          .update({ deleted_at: new Date().toISOString() })
+          .in("id", liveIds.slice(1))
+          .eq("worker_id", workerId)
+          .eq("work_date", workDate)
+          .is("deleted_at", null);
+        if (extraErr != null) {
+          logWorkerDayEntriesSupabaseError(
+            "[Supabase] worker_day_entries duplicate soft delete failed",
+            extraErr
+          );
+        }
+      }
+      console.log("[Supabase] worker_day_entries update ok", {
+        work_date: workDate,
+        project_name: projectName,
+      });
+      return;
+    }
+
+    const { data: deletedFound, error: deletedErr } = await supabase
+      .from("worker_day_entries")
+      .select("id, updated_at")
+      .eq("worker_id", workerId)
+      .eq("work_date", workDate)
+      .not("deleted_at", "is", null)
+      .order("updated_at", { ascending: false })
+      .limit(1);
+    if (deletedErr != null) {
+      logWorkerDayEntriesSupabaseError(
+        "[Supabase] worker_day_entries deleted lookup failed",
+        deletedErr
+      );
+      return;
+    }
+    const deletedIds = workerDayEntryIds(deletedFound);
+    if (deletedIds.length > 0) {
+      const reopened = await writeCurrentRow(deletedIds[0]);
+      if (!reopened) return;
       console.log("[Supabase] worker_day_entries update ok", {
         work_date: workDate,
         project_name: projectName,
@@ -184,6 +240,38 @@ export async function uploadWorkerDayEntryToSupabase(
     });
   } catch (err) {
     console.error("[Supabase] worker_day_entries upload failed", err);
+  }
+}
+
+/**
+ * 해당 작업자+날짜의 현재 행을 소프트 삭제한다.
+ * 물리 삭제는 하지 않고, deleted_at이 비어 있는 행에만 현재 시각을 넣는다.
+ */
+export async function softDeleteWorkerDayEntryFromSupabase(
+  workDate: string
+): Promise<void> {
+  try {
+    const supabase = getSupabaseBrowserClient();
+    if (supabase == null) return;
+    const profile = loadPersonalInfo();
+    if (profile == null) return;
+    const workerId = profile.userId.trim();
+    const date = workDate.trim().split("T")[0];
+    if (!workerId || !date) return;
+    const { error } = await supabase
+      .from("worker_day_entries")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("worker_id", workerId)
+      .eq("work_date", date)
+      .is("deleted_at", null);
+    if (error != null) {
+      logWorkerDayEntriesSupabaseError(
+        "[Supabase] worker_day_entries soft delete failed",
+        error
+      );
+    }
+  } catch (err) {
+    console.error("[Supabase] worker_day_entries soft delete failed", err);
   }
 }
 
