@@ -23,6 +23,11 @@ import {
   type ActiveProjectOption,
 } from "../lib/projectsFromSupabase";
 import { submitProjectRequest } from "../lib/submitProjectRequest";
+import {
+  captureTimesheetImage,
+  submitTimesheetImage,
+  timesheetWorkerPathToken,
+} from "../lib/submitTimesheet";
 import { getMonthGrid, parseISODate, toISODate } from "../utils/date";
 
 const HOUR_PRESETS = [0.5, 1, 1.5, 2] as const;
@@ -38,6 +43,10 @@ const MSG_PROJECT_REQUEST_SENT =
   "\uD504\uB85C\uC81D\uD2B8 \uCD94\uAC00 \uC694\uCCAD\uC774 \uC804\uC1A1\uB418\uC5C8\uC2B5\uB2C8\uB2E4.";
 const MSG_PROJECT_REQUEST_FAILED =
   "\uC694\uCCAD \uC804\uC1A1\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uC2DC\uB3C4\uD574\uC8FC\uC138\uC694.";
+const MSG_TIMESHEET_SUBMITTED =
+  "\uACF5\uC218\uD45C\uAC00 \uC81C\uCD9C\uB418\uC5C8\uC2B5\uB2C8\uB2E4.";
+const MSG_TIMESHEET_SUBMIT_FAILED =
+  "\uACF5\uC218\uD45C \uC81C\uCD9C\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uC2DC\uB3C4\uD574\uC8FC\uC138\uC694.";
 
 function matchesHourPreset(n: number): boolean {
   return HOUR_PRESETS.some((h) => Math.abs(h - n) < 1e-9);
@@ -273,6 +282,14 @@ export default function CalendarScreen({ onEditProfile }: Props) {
   const [showPwaPromo, setShowPwaPromo] = useState(() => !isStandalonePwa());
   const deferredPromptRef = useRef<BeforeInstallPromptEventExt | null>(null);
   const projectsLoadIdRef = useRef(0);
+  const timesheetCaptureRef = useRef<HTMLDivElement>(null);
+  const timesheetSubmitLockRef = useRef(false);
+  const [timesheetSubmitBusy, setTimesheetSubmitBusy] = useState(false);
+  const [timesheetSubmitDraft, setTimesheetSubmitDraft] = useState<{
+    year: number;
+    month0: number;
+    totalLabel: string;
+  } | null>(null);
   const [dayEntries, setDayEntries] = useState<WorkerDayEntry[]>(() =>
     loadWorkerDayEntries()
   );
@@ -559,6 +576,68 @@ export default function CalendarScreen({ onEditProfile }: Props) {
     resolvedManDayForSave <= 0 ||
     saveInProgress;
 
+  function openTimesheetSubmitConfirm() {
+    if (timesheetSubmitLockRef.current) return;
+    setTimesheetSubmitDraft({
+      year: cursor.y,
+      month0: cursor.m0,
+      totalLabel: formatMonthTotal(monthManDayTotal),
+    });
+  }
+
+  async function confirmTimesheetSubmit() {
+    if (timesheetSubmitLockRef.current || timesheetSubmitDraft == null) return;
+    const node = timesheetCaptureRef.current;
+    const profile = loadPersonalInfo();
+    const workerName = profile?.name.trim() ?? "";
+    const workerPhone = profile?.phone.trim() ?? "";
+    const company =
+      profile?.companyName != null && profile.companyName.trim() !== ""
+        ? profile.companyName.trim()
+        : "L&N";
+    if (node == null || profile == null || !workerName || !workerPhone) {
+      window.alert(MSG_TIMESHEET_SUBMIT_FAILED);
+      return;
+    }
+    const submitMonth = `${timesheetSubmitDraft.year}-${String(
+      timesheetSubmitDraft.month0 + 1
+    ).padStart(2, "0")}`;
+    const totalGongsu = Number(timesheetSubmitDraft.totalLabel);
+    if (!Number.isFinite(totalGongsu)) {
+      window.alert(MSG_TIMESHEET_SUBMIT_FAILED);
+      return;
+    }
+
+    timesheetSubmitLockRef.current = true;
+    setTimesheetSubmitBusy(true);
+    try {
+      const image = await captureTimesheetImage(node);
+      if (image == null) {
+        window.alert(MSG_TIMESHEET_SUBMIT_FAILED);
+        return;
+      }
+      const workerToken = await timesheetWorkerPathToken(profile.userId);
+      const ok = await submitTimesheetImage({
+        workerName,
+        workerPhone,
+        company,
+        submitMonth,
+        totalGongsu,
+        workerToken,
+        image: image.blob,
+        extension: image.extension,
+      });
+      window.alert(ok ? MSG_TIMESHEET_SUBMITTED : MSG_TIMESHEET_SUBMIT_FAILED);
+      if (ok) setTimesheetSubmitDraft(null);
+    } catch (e) {
+      console.error("[timesheet] submit failed", e);
+      window.alert(MSG_TIMESHEET_SUBMIT_FAILED);
+    } finally {
+      timesheetSubmitLockRef.current = false;
+      setTimesheetSubmitBusy(false);
+    }
+  }
+
   function goPrevMonth() {
     closeProjectModal();
     setSelectedIso(null);
@@ -600,7 +679,11 @@ export default function CalendarScreen({ onEditProfile }: Props) {
     modalIso !== null ? entriesByIso[modalIso] : undefined;
 
   return (
-    <div className="flex h-full min-h-[100dvh] flex-1 flex-col overflow-hidden bg-slate-100">
+    <>
+    <div
+      ref={timesheetCaptureRef}
+      className="flex h-full min-h-[100dvh] flex-1 flex-col overflow-hidden bg-slate-100"
+    >
       <div className="shrink-0 border-b border-slate-200/80 bg-slate-100 px-1 pb-2 pt-[max(1.25rem,env(safe-area-inset-top,0px))]">
         <div className="flex justify-center pb-1.5 pt-0.5">
           <img
@@ -712,9 +795,24 @@ export default function CalendarScreen({ onEditProfile }: Props) {
 
       <footer className="shrink-0 border-t border-slate-200 bg-white shadow-[0_-4px_12px_rgba(15,23,42,0.06)]">
         <div className="flex flex-col gap-1.5 px-2 py-2">
-          <p className="text-center text-sm font-bold leading-snug text-slate-900">
-            {`\uCD1D \uACF5\uC218: ${formatMonthTotal(monthManDayTotal)}`}
-          </p>
+          <div className="grid grid-cols-[1fr_auto_1fr] items-center">
+            <span aria-hidden />
+            <p className="text-center text-sm font-bold leading-snug text-slate-900">
+              {`\uCD1D \uACF5\uC218: ${formatMonthTotal(monthManDayTotal)}`}
+            </p>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                disabled={timesheetSubmitBusy}
+                onClick={openTimesheetSubmitConfirm}
+                className="shrink-0 rounded-md bg-teal-600 px-2.5 py-0.5 text-xs font-semibold leading-snug text-white shadow-sm active:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
+              >
+                {timesheetSubmitBusy
+                  ? "\uC81C\uCD9C \uC911..."
+                  : "\uACF5\uC218 \uC81C\uCD9C"}
+              </button>
+            </div>
+          </div>
           {showPwaPromo ? (
             <>
               <p className="text-center text-[10px] leading-snug text-slate-500">
@@ -966,5 +1064,55 @@ export default function CalendarScreen({ onEditProfile }: Props) {
         </div>
       ) : null}
     </div>
+    {timesheetSubmitDraft ? (
+      <div
+        className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+        role="presentation"
+      >
+        <button
+          type="button"
+          className="absolute inset-0 bg-slate-900/45"
+          aria-label="close"
+          onClick={() => {
+            if (timesheetSubmitBusy) return;
+            setTimesheetSubmitDraft(null);
+          }}
+        />
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="relative z-10 w-full max-w-mobile rounded-2xl bg-white px-4 py-4 shadow-2xl ring-1 ring-slate-200/80"
+        >
+          <p className="text-center text-base font-semibold leading-snug text-slate-900">
+            {`${monthTitle(
+              timesheetSubmitDraft.year,
+              timesheetSubmitDraft.month0
+            )}\u0020\uACF5\uC218\uD45C\uB97C \uC81C\uCD9C\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?`}
+          </p>
+          <p className="mt-2 text-center text-sm font-bold text-slate-900">
+            {`\uCD1D \uACF5\uC218: ${timesheetSubmitDraft.totalLabel}`}
+          </p>
+          <div className="mt-4 flex gap-2">
+            <button
+              type="button"
+              disabled={timesheetSubmitBusy}
+              onClick={() => setTimesheetSubmitDraft(null)}
+              className="min-h-10 flex-1 rounded-xl border-2 border-slate-200 bg-white text-sm font-semibold text-slate-800 active:bg-slate-50 disabled:opacity-40"
+            >
+              {"\uCDE8\uC18C"}
+            </button>
+            <button
+              type="button"
+              disabled={timesheetSubmitBusy}
+              onClick={() => void confirmTimesheetSubmit()}
+              className="min-h-10 flex-1 rounded-xl bg-teal-600 text-sm font-semibold text-white shadow-sm active:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
+            >
+              {timesheetSubmitBusy ? "\uC81C\uCD9C \uC911..." : "\uC81C\uCD9C"}
+            </button>
+          </div>
+        </div>
+      </div>
+    ) : null}
+    </>
   );
 }
