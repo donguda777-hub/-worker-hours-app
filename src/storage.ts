@@ -195,6 +195,84 @@ export function saveWorkerDayEntries(entries: WorkerDayEntry[]): void {
   );
 }
 
+type WorkerDayRestoreRow = {
+  work_date?: unknown;
+  project_name?: unknown;
+  work_hours?: unknown;
+};
+
+function workerDayEntryFromRemoteRow(
+  row: WorkerDayRestoreRow
+): WorkerDayEntry | null {
+  const date = typeof row.work_date === "string" ? row.work_date : "";
+  const project = typeof row.project_name === "string" ? row.project_name : "";
+  const manDay = Number(row.work_hours);
+  return coerceWorkerDayEntry({ date, project, manDay });
+}
+
+/**
+ * localStorage에 공수표가 없을 때만, 현재 worker_id의 worker_day_entries를 조회해
+ * workerDayEntries로 되돌린다. 조회 실패 시 로컬은 그대로 둔다. 서버에는 쓰지 않는다.
+ * 반환값이 null이면 달력 state를 바꾸지 않는다.
+ */
+export async function restoreWorkerDayEntriesFromSupabaseIfMissing(): Promise<
+  WorkerDayEntry[] | null
+> {
+  try {
+    if (localStorage.getItem(WORKER_DAY_ENTRIES_STORAGE_KEY) != null) {
+      return null;
+    }
+    const profile = loadPersonalInfo();
+    const workerId = profile?.userId.trim() ?? "";
+    if (!workerId) return null;
+    const supabase = getSupabaseBrowserClient();
+    if (supabase == null) return null;
+
+    const pageSize = 1000;
+    const rows: WorkerDayRestoreRow[] = [];
+    for (let from = 0; ; from += pageSize) {
+      const to = from + pageSize - 1;
+      const { data, error } = await supabase
+        .from("worker_day_entries")
+        .select("id, work_date, project_name, work_hours")
+        .eq("worker_id", workerId)
+        .is("deleted_at", null)
+        .order("work_date", { ascending: true })
+        .order("id", { ascending: true })
+        .range(from, to);
+      if (error != null) {
+        logWorkerDayEntriesSupabaseError(
+          "[Supabase] worker_day_entries restore lookup failed",
+          error
+        );
+        return null;
+      }
+      const chunk = (Array.isArray(data) ? data : []) as WorkerDayRestoreRow[];
+      rows.push(...chunk);
+      if (chunk.length < pageSize) break;
+    }
+
+    if (localStorage.getItem(WORKER_DAY_ENTRIES_STORAGE_KEY) != null) {
+      return null;
+    }
+
+    const byDate = new Map<string, WorkerDayEntry>();
+    for (const row of rows) {
+      const entry = workerDayEntryFromRemoteRow(row);
+      if (entry == null) continue;
+      byDate.set(entry.date, entry);
+    }
+    const entries = [...byDate.values()].sort((a, b) =>
+      a.date.localeCompare(b.date)
+    );
+    saveWorkerDayEntries(entries);
+    return entries;
+  } catch (err) {
+    console.error("[Supabase] worker_day_entries restore failed", err);
+    return null;
+  }
+}
+
 const KEY_PROFILE = "workerPersonalInfo";
 export function upsertWorkerDayEntry(
   entries: WorkerDayEntry[],

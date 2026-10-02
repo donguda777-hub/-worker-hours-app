@@ -11,6 +11,7 @@ import {
   deleteWorkerDayEntry,
   loadPersonalInfo,
   loadWorkerDayEntries,
+  restoreWorkerDayEntriesFromSupabaseIfMissing,
   saveWorkerDayEntries,
   uploadWorkerDayEntryToSupabase,
   upsertWorkerDayEntry,
@@ -293,6 +294,17 @@ export default function CalendarScreen({ onEditProfile }: Props) {
   const [dayEntries, setDayEntries] = useState<WorkerDayEntry[]>(() =>
     loadWorkerDayEntries()
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    void restoreWorkerDayEntriesFromSupabaseIfMissing().then((restored) => {
+      if (cancelled || restored == null) return;
+      setDayEntries(restored);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (isStandalonePwa()) {
