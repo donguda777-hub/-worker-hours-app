@@ -211,17 +211,14 @@ function workerDayEntryFromRemoteRow(
 }
 
 /**
- * 로컬 공수가 없을 때만(키 없음 또는 []) 현재 worker_id의 worker_day_entries를 조회한다.
- * 서버에 1건 이상 있을 때만 localStorage에 쓴다. 0건이거나 실패하면 로컬을 바꾸지 않는다.
- * 반환값이 null이면 달력 state를 바꾸지 않는다. 서버에는 쓰지 않는다.
+ * CalendarScreen이 열릴 때 현재 worker_id의 worker_day_entries를 조회한다.
+ * localStorage 상태와 관계없이 조회한다. 성공한 결과만 로컬에 반영한다.
+ * 실패하면 null을 반환하고 로컬은 바꾸지 않는다. 서버에는 쓰지 않는다.
  */
 export async function restoreWorkerDayEntriesFromSupabaseIfMissing(): Promise<
   WorkerDayEntry[] | null
 > {
   try {
-    if (loadWorkerDayEntries().length > 0) {
-      return null;
-    }
     const profile = loadPersonalInfo();
     const workerId = profile?.userId.trim() ?? "";
     if (!workerId) return null;
@@ -252,10 +249,6 @@ export async function restoreWorkerDayEntriesFromSupabaseIfMissing(): Promise<
       if (chunk.length < pageSize) break;
     }
 
-    if (loadWorkerDayEntries().length > 0) {
-      return null;
-    }
-
     const byDate = new Map<string, WorkerDayEntry>();
     for (const row of rows) {
       const entry = workerDayEntryFromRemoteRow(row);
@@ -265,7 +258,6 @@ export async function restoreWorkerDayEntriesFromSupabaseIfMissing(): Promise<
     const entries = [...byDate.values()].sort((a, b) =>
       a.date.localeCompare(b.date)
     );
-    if (entries.length === 0) return null;
     saveWorkerDayEntries(entries);
     return entries;
   } catch (err) {
