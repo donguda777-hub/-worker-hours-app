@@ -149,7 +149,7 @@ const WEEKDAYS = [
   "\uC218",
   "\uBAA9",
   "\uAE08",
-  "\uD638",
+  "\uD1A0",
 ] as const;
 
 /** month 1-12, day ? fixed solar holidays only (no lunar / substitute days) */
